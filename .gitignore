@@ -1,0 +1,30 @@
+# Environment variables
+.env
+.env.local
+
+# Logs
+*.log
+
+# Dependencies and caches
+__pycache__/
+*.pyc
+node_modules/
+.venv/
+venv/
+target/
+dist/
+build/
+
+# OS
+.DS_Store
+/.wrangler
+
+# Local tooling (kept out of the published repo)
+.claude/
+.kimi/
+CLAUDE.md
+AGENTS.md
+
+# Deployment config with environment-specific (non-secret) IDs/domain.
+# Copy wrangler.example.toml to wrangler.toml and keep your real one local.
+wrangler.toml

@@ -1,0 +1,63 @@
+# Copy this file to wrangler.toml and fill in your own values:
+#   cp wrangler.example.toml wrangler.toml
+# Nothing here is secret, but the IDs/domain are environment-specific. Real
+# secrets are never stored in wrangler.toml — set them with `wrangler secret put`
+# (see README).
+
+name = "cloudflare-cost-hub"
+main = "dist/server/index.js"
+compatibility_date = "2024-06-20"
+compatibility_flags = ["nodejs_compat"]
+
+# Your Worker's public hostname (a custom domain, or a *.workers.dev route).
+routes = [{ pattern = "cost-hub.example.com", custom_domain = true }]
+
+[vars]
+# Cloudflare account used by scheduled jobs for live usage data. The analytics
+# token is a secret (set via `wrangler secret put CF_ANALYTICS_TOKEN`).
+CF_ACCOUNT_ID = "your-cloudflare-account-id"
+CF_ACCOUNT_NAME = "Your Account Name"
+# Public base URL of this deployment, used for links in alert emails.
+APP_URL = "https://cost-hub.example.com"
+# Email alerts (Resend). The API key is a secret; this sender is non-sensitive.
+ALERT_EMAIL_FROM = "Cloudflare Cost Hub <noreply@example.com>"
+# Cloudflare OAuth (self-managed public/PKCE client). TOKEN_ENC_KEY is a secret;
+# no client secret is needed for a PKCE client.
+CF_OAUTH_CLIENT_ID = "your-oauth-client-id"
+CF_OAUTH_REDIRECT_URI = "https://cost-hub.example.com/api/auth/cf/callback"
+# Optional: request the "User Details: Read" scope for the real verified email.
+# CF_OAUTH_EXTRA_SCOPES = "user-details.read"
+
+# D1 database binding (create with `wrangler d1 create` and paste the id).
+[[d1_databases]]
+binding = "DB"
+database_name = "cloudflare-cost-hub-db"
+database_id = "your-d1-database-id"
+
+# R2 bucket binding for historical snapshots.
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "cloudflare-cost-hub-data"
+
+# Optional KV cache (create with `wrangler kv namespace create CACHE`). The app
+# works without it — it just recomputes on each request.
+[[kv_namespaces]]
+binding = "CACHE"
+id = "your-kv-namespace-id"
+
+# Workers Sites static assets.
+[site]
+bucket = "./dist/client"
+
+# Durable Objects for alert deduplication.
+[[durable_objects.bindings]]
+name = "ALERT_DO"
+class_name = "AlertDurableObject"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["AlertDurableObject"]
+
+# Daily snapshot of usage/cost so history survives Cloudflare's ~90 day retention.
+[triggers]
+crons = ["0 1 * * *"]
