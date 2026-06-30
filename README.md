@@ -235,6 +235,34 @@ donation, not a paywall — nothing in the hosted app is gated behind payment.
 > `ALERTS_REQUIRE_PAYMENT`) so a future operator *could* gate automated alerts
 > behind a paid plan, but the reference deployment intentionally does not.
 
+## FAQ
+
+**Why not just use Cloudflare's own billing dashboard?**
+Cloudflare's bill tells you the total; Cost Hub tells you *what's driving it*. It
+shows per-instance cost drivers (which database, bucket, or script), free-tier vs
+paid-plan allowance per metric (so you can see why over-free usage can still be
+$0), a 90+ day history (Analytics only retains ~90 days), month-end forecasts,
+spike detection, budgets, and email alerts — across every product in one view.
+
+**Are the cost figures real?**
+They're estimates based on published Cloudflare pricing, computed against your
+paid-plan included allowances. Treat them as guidance, not a billing source of
+truth — always verify against your Cloudflare invoice.
+
+**Is it safe to connect my account?**
+Sign-in uses Cloudflare OAuth with **read-only** scopes (no API token to copy).
+Tokens are AES-GCM encrypted at rest, each user only ever sees their own connected
+account, and you can revoke access anytime in Cloudflare (My Profile → Access
+Management → Connected Applications). Want full control? Self-host it — every
+feature is free.
+
+**Do I need a paid Cloudflare plan to use it?**
+No — you can monitor a free-plan account; the dashboard reads analytics that are
+available on the free plan. Paid-plan cost attribution needs a `Billing Read` API
+token, which OAuth sign-in can't grant, so it's shown only when available.
+(Self-hosting the app itself uses Durable Objects, for which Workers Paid is
+recommended — see Prerequisites.)
+
 ## Notes
 
 - Cost figures are **estimates** based on published Cloudflare pricing and may differ from your actual invoice.
