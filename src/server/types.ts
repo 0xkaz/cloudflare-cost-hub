@@ -16,6 +16,9 @@ export interface Env {
   RESEND_API_KEY?: string;
   ALERT_EMAIL_FROM?: string;
   ALERT_EMAIL_TO?: string;
+  // Usage-threshold alerts: comma-separated % of the paid-plan monthly allowance
+  // (default "20,40,50,70,80,90"). Checked by the hourly cron.
+  ALERT_THRESHOLDS?: string;
   // Monetization flag. While unset/"false", every enabled user receives alerts
   // (no payment enforced yet). Set to "true" to gate automated alerts behind a
   // paid plan (user_alert_settings.plan / paid_until).

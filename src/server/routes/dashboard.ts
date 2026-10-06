@@ -7,7 +7,7 @@ import { getFreeTierLimits, findLimit } from '../db/free-tier';
 import { captureRetainedMonths, getCostTrend } from '../snapshots';
 import { getAccountPlan } from '../cloudflare-rest';
 import { getServicesAnalysis } from '../services';
-import { runDailyAlertForUser } from '../alerts';
+import { runDailyAlertForUser, runThresholdAlertForUser } from '../alerts';
 import { isRateLimit } from '../http';
 import { getUserAlertSetting } from '../db/user-alert-settings';
 import { resolveCloudflareAccount } from '../cf-oauth';
@@ -198,6 +198,21 @@ dashboard.post('/alert-test', async (c) => {
     const detail = err instanceof Error ? err.message : String(err);
     console.error('Alert test failed:', detail);
     return c.json({ error: 'Failed to send alert', detail }, 502);
+  }
+});
+
+// Preview the usage-threshold check for the signed-in user without sending
+// (which metrics would trigger an alert at the next hourly run).
+dashboard.get('/threshold-preview', async (c) => {
+  const session = c.get('session' as never) as { userId: string };
+  try {
+    const saved = await getUserAlertSetting(c.env.DB, session.userId);
+    const setting = saved ?? { userId: session.userId, email: null, enabled: true, lastSentDate: null, plan: 'free' as const, paidUntil: null };
+    return c.json(await runThresholdAlertForUser(c.env, setting, true));
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    console.error('Threshold preview failed:', detail);
+    return c.json({ error: 'Failed to evaluate thresholds', detail }, 502);
   }
 });
 

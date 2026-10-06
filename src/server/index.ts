@@ -11,7 +11,10 @@ import reportsRoute from './routes/reports';
 import { AlertDurableObject } from './durable-objects/alert';
 import { accountFromEnv, captureRetainedMonths } from './snapshots';
 import { accountInputForConnected, listConnectedAccounts } from './cf-oauth';
-import { runDailyAlerts } from './alerts';
+import { runDailyAlerts, runThresholdAlerts } from './alerts';
+
+// The daily cron (snapshots + digest); any other cron only runs the hourly threshold check.
+const DAILY_CRON = '0 1 * * *';
 import manifestJSON from '__STATIC_CONTENT_MANIFEST';
 
 export { AlertDurableObject };
@@ -93,13 +96,17 @@ async function snapshotAllAccounts(env: Env): Promise<void> {
 
 export default {
   fetch: (request: Request, env: Env, ctx: ExecutionContext) => app.fetch(request, env, ctx),
-  // Daily: snapshot cost history (survives Cloudflare's ~90 day retention) and
-  // email a usage/cost digest.
-  scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
+  // Daily (DAILY_CRON): snapshot cost history (survives Cloudflare's ~90 day
+  // retention) and email a usage/cost digest. Every run (hourly cron too):
+  // usage-threshold alerts against the paid-plan allowances.
+  scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil(
       (async () => {
-        await snapshotAllAccounts(env);
-        await runDailyAlerts(env).catch((err) => console.error('Scheduled alert failed:', err));
+        if (event.cron === DAILY_CRON || !event.cron) {
+          await snapshotAllAccounts(env);
+          await runDailyAlerts(env).catch((err) => console.error('Scheduled alert failed:', err));
+        }
+        await runThresholdAlerts(env).catch((err) => console.error('Threshold alert failed:', err));
       })()
     );
   },

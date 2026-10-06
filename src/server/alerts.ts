@@ -13,6 +13,7 @@ import {
 import { getBudget } from './db/budgets';
 import { getAccountEntitlement } from './db/account-entitlements';
 import { evaluateBudget, type BudgetStatus } from './budgets';
+import { metricKey, newCrossings, parseThresholds, type ThresholdCrossing } from './thresholds';
 
 export const ALERT_EMAIL_KEY = 'alert_email';
 
@@ -314,6 +315,139 @@ export async function runDailyAlerts(env: Env, force = false): Promise<AlertResu
       if (r.sent) sent++;
     } catch (err) {
       console.error('User alert failed:', setting.userId, err);
+    }
+  }
+  return { sent: sent > 0, count: sent };
+}
+
+
+// ---------------------------------------------------------------------------
+// Usage-threshold alerts (run hourly): one e-mail each time a metric's
+// month-to-date usage reaches a higher step of its paid-plan included allowance
+// (ALERT_THRESHOLDS, default 20,40,50,70,80,90 %). Levels already notified are
+// kept per scope / account / month in threshold_alert_state.
+// ---------------------------------------------------------------------------
+
+async function notifiedLevels(env: Env, scope: string, accountId: string, period: string): Promise<Map<string, number>> {
+  try {
+    const { results } = await env.DB.prepare(
+      'SELECT metric_key, level FROM threshold_alert_state WHERE scope = ? AND account_id = ? AND period = ?'
+    )
+      .bind(scope, accountId, period)
+      .all();
+    return new Map((results ?? []).map((r) => [String(r.metric_key), Number(r.level)]));
+  } catch (err) {
+    console.error('threshold_alert_state read failed:', err);
+    return new Map();
+  }
+}
+
+async function recordLevels(env: Env, scope: string, accountId: string, period: string, crossings: ThresholdCrossing[]): Promise<void> {
+  const now = new Date().toISOString();
+  await env.DB.batch(
+    crossings.map((c) =>
+      env.DB.prepare(
+        `INSERT INTO threshold_alert_state (scope, account_id, period, metric_key, level, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(scope, account_id, period, metric_key) DO UPDATE SET level = excluded.level, updated_at = excluded.updated_at`
+      ).bind(scope, accountId, period, c.key, c.level, now)
+    )
+  );
+}
+
+export function buildThresholdEmail(
+  accountName: string,
+  month: string,
+  crossings: ThresholdCrossing[],
+  appUrl: string
+): { subject: string; html: string } {
+  const top = crossings[0];
+  const subject =
+    crossings.length === 1
+      ? `⚠️ ${top.metric.product} ${top.metric.metric} reached ${top.level}% of the paid-plan allowance`
+      : `⚠️ ${crossings.length} Cloudflare metrics crossed usage thresholds (up to ${top.level}%)`;
+  const color = (level: number) => (level >= 90 ? '#f87171' : level >= 70 ? '#fb923c' : level >= 50 ? '#fbbf24' : '#93c5fd');
+  const rows = crossings
+    .map(
+      (c) => `<tr>
+        <td style="${TD}">${c.metric.product} · ${c.metric.metric}</td>
+        <td style="${TD}text-align:right;color:#cbd5e1;">${compact(c.metric.monthlyUsed ?? 0)} / ${compact(c.metric.paidIncluded ?? 0)} ${c.metric.unit}</td>
+        <td style="${TD}text-align:right;color:${color(c.level)};font-weight:600;">${c.share.toFixed(1)}%</td>
+        <td style="${TD}text-align:right;color:${color(c.level)};">≥ ${c.level}%${c.previous ? ` <span style="color:#64748b;">(was ${c.previous}%)</span>` : ''}</td>
+        <td style="${TD}text-align:right;color:${(c.metric.estimatedCost ?? 0) > 0 ? '#f87171' : '#64748b'};">${(c.metric.estimatedCost ?? 0) > 0 ? `$${c.metric.estimatedCost!.toFixed(2)}` : '—'}</td>
+      </tr>`
+    )
+    .join('');
+  const html = `<div style="font-family:ui-sans-serif,system-ui,sans-serif;background:#0f172a;color:#e2e8f0;padding:24px;border-radius:12px;max-width:680px;">
+    <h2 style="margin:0 0 4px;">Cloudflare Cost Hub</h2>
+    <p style="margin:0 0 16px;color:#94a3b8;font-size:14px;">${accountName} — usage threshold alert (${month})</p>
+    <p style="margin:0 0 12px;font-size:14px;">These metrics reached a new share of the monthly allowance included in the Workers Paid plan. Usage beyond 100% is billed.</p>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <thead><tr><th style="${TH}">Metric</th><th style="${TH}text-align:right;">Month to date</th><th style="${TH}text-align:right;">Used</th><th style="${TH}text-align:right;">Threshold</th><th style="${TH}text-align:right;">Est. cost</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+    <p style="margin:24px 0 0;font-size:12px;color:#64748b;">
+      <a href="${appUrl}/" style="color:#818cf8;">Open dashboard</a> · You get one e-mail per metric for each threshold, at most once per threshold per month.
+    </p>
+  </div>`;
+  return { subject, html };
+}
+
+async function checkThresholds(
+  env: Env,
+  scope: string,
+  account: CloudflareAccountInput,
+  to: string[],
+  thresholds: number[],
+  dryRun: boolean
+): Promise<AlertResult & { crossings?: Array<{ metric: string; share: number; level: number; previous: number }> }> {
+  const analysis = await getServicesAnalysis(env, account);
+  const metrics = analysis.services.flatMap((s) => s.metrics);
+  const period = analysis.month;
+  const crossings = newCrossings(metrics, await notifiedLevels(env, scope, account.accountId, period), thresholds);
+  const summary = crossings.map((c) => ({ metric: metricKey(c.metric), share: Math.round(c.share * 10) / 10, level: c.level, previous: c.previous }));
+  if (crossings.length === 0) return { sent: false, reason: 'No new threshold crossed', crossings: summary };
+  if (dryRun) return { sent: false, reason: 'Dry run', count: crossings.length, crossings: summary };
+  const appUrl = (env.APP_URL || 'https://cloudflare-cost-hub.0xkaz.com').replace(/\/+$/, '');
+  const { subject, html } = buildThresholdEmail(analysis.accountName, period, crossings, appUrl);
+  const ok = await sendEmail(env, subject, html, to);
+  // Only advance the notified level after a successful send, so failures are retried next hour.
+  if (ok) await recordLevels(env, scope, account.accountId, period, crossings);
+  return { sent: ok, count: crossings.length, crossings: summary };
+}
+
+// Threshold check for one user's connected account (also used by the preview endpoint).
+export async function runThresholdAlertForUser(env: Env, setting: UserAlertSetting, dryRun = false) {
+  if (!env.RESEND_API_KEY && !dryRun) return { sent: false, reason: 'Alerts not configured' };
+  if (!setting.enabled && !dryRun) return { sent: false, reason: 'Alerts disabled' };
+  const account = await resolveCloudflareAccount(env, setting.userId);
+  if (!account) return { sent: false, reason: 'No account connected' };
+  const entitlement = await getAccountEntitlement(env.DB, account.accountId);
+  if (!isEntitled(env, entitlement)) return { sent: false, reason: 'Paid plan required' };
+  const to = await recipientsForUser(env, setting);
+  if (to.length === 0 && !dryRun) return { sent: false, reason: 'No recipient' };
+  return checkThresholds(env, `user:${setting.userId}`, account, to, parseThresholds(env.ALERT_THRESHOLDS), dryRun);
+}
+
+// Scheduled entry point (hourly). Mirrors runDailyAlerts: every enabled user, or
+// the env-configured account when no user has configured alerts.
+export async function runThresholdAlerts(env: Env): Promise<AlertResult> {
+  if (!env.RESEND_API_KEY) return { sent: false, reason: 'Alerts not configured' };
+  const thresholds = parseThresholds(env.ALERT_THRESHOLDS);
+  const settings = await listEnabledAlertSettings(env.DB);
+  if (settings.length === 0) {
+    if (!env.CF_ANALYTICS_TOKEN || !env.CF_ACCOUNT_ID) return { sent: false, reason: 'No account configured' };
+    const acct = await resolveCloudflareAccount(env, undefined);
+    if (!acct) return { sent: false, reason: 'No account configured' };
+    const to = await envRecipients(env);
+    if (to.length === 0) return { sent: false, reason: 'No recipient' };
+    return checkThresholds(env, 'env', acct, to, thresholds, false);
+  }
+  let sent = 0;
+  for (const setting of settings) {
+    try {
+      const r = await runThresholdAlertForUser(env, setting);
+      if (r.sent) sent++;
+    } catch (err) {
+      console.error('Threshold alert failed:', setting.userId, err);
     }
   }
   return { sent: sent > 0, count: sent };

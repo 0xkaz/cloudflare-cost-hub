@@ -58,6 +58,8 @@ class_name = "AlertDurableObject"
 tag = "v1"
 new_classes = ["AlertDurableObject"]
 
-# Daily snapshot of usage/cost so history survives Cloudflare's ~90 day retention.
+# 01:00 UTC daily: snapshot of usage/cost (history survives Cloudflare's ~90 day
+# retention) + daily digest. Every hour at :15: usage-threshold alerts
+# (ALERT_THRESHOLDS, default 20,40,50,70,80,90 % of the paid-plan allowance).
 [triggers]
-crons = ["0 1 * * *"]
+crons = ["0 1 * * *", "15 * * * *"]

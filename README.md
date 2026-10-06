@@ -43,6 +43,7 @@ email alerts — all in one place. Built entirely on the Cloudflare stack.
 - **Cost trend & history** — a daily snapshot keeps cost history beyond Cloudflare's ~90 day analytics retention (stored per account in D1 + R2). History is scoped per Cloudflare account.
 - **Anomaly detection** — spike days highlighted on the usage chart.
 - **Budgets** — set a monthly spend budget per account; the daily digest warns when the month-end forecast nears or exceeds it.
+- **Usage-threshold alerts** — checked hourly: one e-mail when a metric's month-to-date usage reaches 20 / 40 / 50 / 70 / 80 / 90 % of the allowance included in the Workers Paid plan (configurable with `ALERT_THRESHOLDS`), once per threshold per month. `GET /api/dashboard/threshold-preview` (signed in) shows what the next run would report.
 - **Email alerts** — a per-user daily digest (via Resend) when a metric is billable, nears its free-tier limit, or crosses a budget. Each connected account is snapshotted/alerted by the daily cron (multi-account fan-out), with per-user recipients and an enable toggle.
 - **Reports** — export monthly cost history and current usage as CSV.
 
