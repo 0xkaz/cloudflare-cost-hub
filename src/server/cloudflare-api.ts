@@ -362,44 +362,26 @@ async function fetchR2StorageDaily(
   start: Date,
   end: Date
 ): Promise<DailyValue[]> {
-  const query = `
-    query ($accountTag: String!, $start: Date!, $end: Date!) {
-      viewer {
-        accounts(filter: { accountTag: $accountTag }) {
-          r2StorageAdaptiveGroups(limit: 10000, filter: { date_geq: $start, date_leq: $end }) {
-            dimensions { date }
-            max { payloadSize }
-          }
-        }
-      }
-    }
-  `;
-  const data = await gql<
-    AccountsEnvelope<'r2StorageAdaptiveGroups', { dimensions: { date: string }; max: { payloadSize: number } }>
-  >(account, query, { accountTag: account.accountId, start: ymd(start), end: ymd(end) });
-  // Convert bytes to GB for display against the storage limit.
-  return sortByDate(
-    datasetRows(data, 'r2StorageAdaptiveGroups').map((r) => ({
-      date: r.dimensions.date,
-      value: Math.round(((Number(r.max.payloadSize) || 0) / 1_000_000_000) * 100) / 100,
-    }))
-  );
+  return fetchStorageDailyGB(account, start, end, 'r2StorageAdaptiveGroups', 'payloadSize', 'bucketName');
 }
 
-// Generic daily storage fetcher: returns the peak stored bytes per day as GB.
+// Generic daily storage fetcher: returns the stored bytes per day as GB, summed over
+// instances (buckets, databases, namespaces). Grouping by date alone would return the
+// peak of the largest single instance, not the account total that billing uses.
 async function fetchStorageDailyGB(
   account: CloudflareAccountInput,
   start: Date,
   end: Date,
-  dataset: 'd1StorageAdaptiveGroups' | 'kvStorageAdaptiveGroups' | 'durableObjectsStorageGroups',
-  field: string
+  dataset: 'r2StorageAdaptiveGroups' | 'd1StorageAdaptiveGroups' | 'kvStorageAdaptiveGroups',
+  field: string,
+  instanceDim: string
 ): Promise<DailyValue[]> {
   const query = `
     query ($accountTag: String!, $start: Date!, $end: Date!) {
       viewer {
         accounts(filter: { accountTag: $accountTag }) {
           ${dataset}(limit: 10000, filter: { date_geq: $start, date_leq: $end }) {
-            dimensions { date }
+            dimensions { date ${instanceDim} }
             max { ${field} }
           }
         }
@@ -409,11 +391,20 @@ async function fetchStorageDailyGB(
   const data = await gql<
     AccountsEnvelope<typeof dataset, { dimensions: { date: string }; max: Record<string, number> }>
   >(account, query, { accountTag: account.accountId, start: ymd(start), end: ymd(end) });
+  return sumStorageByDate(datasetRows(data, dataset), field);
+}
+
+// Sum each instance's peak bytes per day and convert to GB.
+export function sumStorageByDate(
+  rows: Array<{ dimensions: { date: string }; max: Record<string, number> }>,
+  field: string
+): DailyValue[] {
+  const byDate = new Map<string, number>();
+  for (const r of rows) {
+    byDate.set(r.dimensions.date, (byDate.get(r.dimensions.date) ?? 0) + (Number(r.max?.[field]) || 0));
+  }
   return sortByDate(
-    datasetRows(data, dataset).map((r) => ({
-      date: r.dimensions.date,
-      value: Math.round(((Number(r.max[field]) || 0) / 1_000_000_000) * 100) / 100,
-    }))
+    [...byDate].map(([date, bytes]) => ({ date, value: Math.round((bytes / 1_000_000_000) * 100) / 100 }))
   );
 }
 
@@ -488,8 +479,8 @@ async function fetchMonthlyUsage(
     safe(fetchQueueOpsDaily(account, start, end), []),
     safe(fetchR2OperationsDaily(account, start, end), []),
     safe(fetchR2StorageDaily(account, start, end), []),
-    safe(fetchStorageDailyGB(account, start, end, 'd1StorageAdaptiveGroups', 'databaseSizeBytes'), []),
-    safe(fetchStorageDailyGB(account, start, end, 'kvStorageAdaptiveGroups', 'byteCount'), []),
+    safe(fetchStorageDailyGB(account, start, end, 'd1StorageAdaptiveGroups', 'databaseSizeBytes', 'databaseId'), []),
+    safe(fetchStorageDailyGB(account, start, end, 'kvStorageAdaptiveGroups', 'byteCount', 'namespaceId'), []),
     safe(fetchDODurationDaily(account, start, end), []),
   ]);
   return {

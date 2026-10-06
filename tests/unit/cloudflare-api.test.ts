@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   fetchAccountUsage,
   generateDemoUsage,
+  sumStorageByDate,
 } from '../../src/server/cloudflare-api';
 import { DEFAULT_FREE_TIER_LIMITS } from '../../src/server/db/free-tier';
 
@@ -74,5 +75,20 @@ describe('cloudflare-api', () => {
         DEFAULT_FREE_TIER_LIMITS
       )
     ).rejects.toThrow('Cloudflare API error');
+  });
+});
+
+describe('sumStorageByDate', () => {
+  it('sums every bucket per day instead of taking the largest one', () => {
+    const rows = [
+      { dimensions: { date: '2026-10-06', bucketName: 'a' }, max: { payloadSize: 7_210_000_000 } },
+      { dimensions: { date: '2026-10-06', bucketName: 'b' }, max: { payloadSize: 6_140_000_000 } },
+      { dimensions: { date: '2026-10-06', bucketName: 'c' }, max: { payloadSize: 1_940_000_000 } },
+      { dimensions: { date: '2026-10-05', bucketName: 'a' }, max: { payloadSize: 1_000_000_000 } },
+    ];
+    expect(sumStorageByDate(rows, 'payloadSize')).toEqual([
+      { date: '2026-10-05', value: 1 },
+      { date: '2026-10-06', value: 15.29 },
+    ]);
   });
 });
