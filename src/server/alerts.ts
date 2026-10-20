@@ -14,6 +14,7 @@ import { getBudget } from './db/budgets';
 import { getAccountEntitlement } from './db/account-entitlements';
 import { evaluateBudget, type BudgetStatus } from './budgets';
 import { metricKey, newCrossings, parseThresholds, type ThresholdCrossing } from './thresholds';
+import { fetchWatchReport, hasWatchFindings, watchSection, type WatchReport } from './watch';
 
 export const ALERT_EMAIL_KEY = 'alert_email';
 
@@ -128,20 +129,23 @@ function budgetBanner(budget: BudgetStatus | null): string {
   </div>`;
 }
 
-function buildEmail(
+export function buildEmail(
   analysis: ServicesAnalysis,
   budget: BudgetStatus | null,
-  appUrl: string
+  appUrl: string,
+  watch: WatchReport | null = null
 ): { subject: string; html: string } {
   const metrics = allMetrics(analysis);
   const flagged = noteworthy(metrics);
   const billableCount = metrics.filter((m) => m.tier === 'billable').length;
 
-  const subject = budget?.exceeded
+  const failing = watch?.failing.length ?? 0;
+  const base = budget?.exceeded
     ? `🚨 Over budget: $${analysis.forecastedCost.toFixed(2)} forecast vs $${budget.limit.toFixed(2)}`
     : billableCount
       ? `⚠️ Cloudflare cost alert: $${analysis.currentMonthCost.toFixed(2)} this month`
       : `Cloudflare usage report — ${flagged.length} metric${flagged.length === 1 ? '' : 's'} to watch`;
+  const subject = failing ? `❌ ${failing} Worker${failing === 1 ? '' : 's'} failing · ${base}` : base;
 
   const html = `<div style="font-family:ui-sans-serif,system-ui,sans-serif;background:#0f172a;color:#e2e8f0;padding:24px;border-radius:12px;max-width:680px;">
     <h2 style="margin:0 0 4px;">Cloudflare Cost Hub</h2>
@@ -154,6 +158,7 @@ function buildEmail(
     <h3 style="margin:24px 0 8px;font-size:15px;">Usage status (all services)</h3>
     ${metricsTable(metrics)}
     ${driversTable(analysis.topDrivers)}
+    ${watchSection(watch)}
     <p style="margin:24px 0 0;font-size:12px;color:#64748b;">
       <a href="${appUrl}/" style="color:#818cf8;">Open dashboard</a> ·
       🔴 billable · 🟡 over free tier (within paid) · 🟢 within free tier
@@ -227,12 +232,14 @@ async function buildAndSend(
   const analysis = await getServicesAnalysis(env, account);
   const flagged = noteworthy(allMetrics(analysis));
   const budget = budgetLimit != null ? evaluateBudget(budgetLimit, analysis.forecastedCost) : null;
-  // A budget overage is always worth sending, even with nothing else to report.
-  if (!force && !budget?.exceeded && flagged.length === 0 && analysis.currentMonthCost === 0) {
+  // Failing Workers / usage jumps (best-effort: a missing analytics permission must not block the digest).
+  const watch = await fetchWatchReport(account).catch((err) => { console.error('Watch report failed:', err); return null; });
+  // A budget overage or a failing Worker is always worth sending, even with nothing else to report.
+  if (!force && !budget?.exceeded && !hasWatchFindings(watch) && flagged.length === 0 && analysis.currentMonthCost === 0) {
     return { sent: false, reason: 'Nothing to report' };
   }
   const appUrl = (env.APP_URL || 'https://cloudflare-cost-hub.0xkaz.com').replace(/\/+$/, '');
-  const { subject, html } = buildEmail(analysis, budget, appUrl);
+  const { subject, html } = buildEmail(analysis, budget, appUrl, watch);
   const ok = await sendEmail(env, subject, html, to);
   return { sent: ok, count: flagged.length };
 }

@@ -12,6 +12,7 @@ import { isRateLimit } from '../http';
 import { getUserAlertSetting } from '../db/user-alert-settings';
 import { resolveCloudflareAccount } from '../cf-oauth';
 import { bustAccountCache, cacheKey, cachedJson } from '../cache';
+import { fetchWatchReport } from '../watch';
 import type { DashboardData } from '../../shared/types';
 
 // Cloudflare usage data has daily granularity, so a few minutes of caching is
@@ -213,6 +214,21 @@ dashboard.get('/threshold-preview', async (c) => {
     const detail = err instanceof Error ? err.message : String(err);
     console.error('Threshold preview failed:', detail);
     return c.json({ error: 'Failed to evaluate thresholds', detail }, 502);
+  }
+});
+
+// Account watch shown in the daily digest: Workers failing yesterday (UTC) and the top Workers / D1 databases
+// with jumps against their previous-week average.
+dashboard.get('/watch', async (c) => {
+  const session = c.get('session' as never) as { userId: string };
+  try {
+    const account = await resolveCloudflareAccount(c.env, session.userId);
+    if (!account) return c.json({ error: 'Cloudflare account not configured' }, 400);
+    return c.json(await fetchWatchReport(account));
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    console.error('Watch report failed:', detail);
+    return c.json({ error: 'Failed to build the watch report', detail }, 502);
   }
 });
 
