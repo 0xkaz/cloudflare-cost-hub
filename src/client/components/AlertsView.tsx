@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Mail } from 'lucide-react';
+import { AccountWatch } from './AccountWatch';
 
 interface AlertSettings {
   email: string;
@@ -136,6 +137,8 @@ export function AlertsView() {
           {testMsg && <span className="ml-3 text-sm text-slate-300">{testMsg}</span>}
         </div>
       </div>
+
+      <AccountWatch />
     </div>
   );
 }
