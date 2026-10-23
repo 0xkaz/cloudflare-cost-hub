@@ -55,11 +55,14 @@ describe('watch section in the digest', () => {
   const report: WatchReport = {
     day, failing: [{ script: 'gcc-prop', requests: 24, errors: 24, share: 1, statuses: { scriptThrewException: 24 } }],
     workersCpu: [], workersRequests: [], d1Written: [{ name: 'uae-prop-db', value: 300_000, prevAvg: 50_000, spike: true }], d1Read: [],
+    kvReads: [], aiNeurons: [], r2Storage: [],
   };
   it('is a finding when a Worker fails or a jump appears', () => {
     expect(hasWatchFindings(null)).toBe(false);
     expect(hasWatchFindings(report)).toBe(true);
     expect(hasWatchFindings({ ...report, failing: [], d1Written: [] })).toBe(false);
+    expect(hasWatchFindings({ ...report, failing: [], d1Written: [], aiNeurons: [{ name: 'meta/llama-4-scout', value: 787_000, prevAvg: 60_000, spike: true }] })).toBe(true);
+    expect(watchSection({ ...report, r2Storage: [{ name: 'bit-japan-auction-docs', value: 7.2, prevAvg: 0, spike: true }] })).toContain('🔺 bit-japan-auction-docs');
   });
   it('renders the failing Worker and the jump, and prefixes the subject', () => {
     const html = watchSection(report);

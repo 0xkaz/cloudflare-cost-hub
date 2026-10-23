@@ -5,13 +5,16 @@ import { Activity, AlertTriangle } from 'lucide-react';
 // schedules failing yesterday (UTC) and the top Workers / D1 databases with jumps against the previous week.
 interface FailingWorker { script: string; cron?: string; requests: number; errors: number; share: number; statuses: Record<string, number> }
 interface Consumer { name: string; value: number; prevAvg: number; spike: boolean }
-interface WatchReport { day: string; failing: FailingWorker[]; workersCpu: Consumer[]; workersRequests: Consumer[]; d1Written: Consumer[]; d1Read: Consumer[] }
+interface WatchReport {
+  day: string; failing: FailingWorker[]; workersCpu: Consumer[]; workersRequests: Consumer[]; d1Written: Consumer[]; d1Read: Consumer[];
+  kvReads?: Consumer[]; aiNeurons?: Consumer[]; r2Storage?: Consumer[];
+}
 
 const fmt = (n: number) =>
   n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : n.toFixed(n < 10 ? 1 : 0);
 
-function ConsumerTable({ title, unit, rows }: { title: string; unit: string; rows: Consumer[] }) {
-  if (!rows.length) return null;
+function ConsumerTable({ title, unit, rows }: { title: string; unit: string; rows?: Consumer[] }) {
+  if (!rows?.length) return null;
   return (
     <div>
       <div className="mb-1 text-sm font-medium text-slate-300">{title}</div>
@@ -82,6 +85,9 @@ export function AccountWatch() {
           <ConsumerTable title="Workers by requests" unit="" rows={report.workersRequests} />
           <ConsumerTable title="D1 rows written" unit="" rows={report.d1Written} />
           <ConsumerTable title="D1 rows read" unit="" rows={report.d1Read} />
+          <ConsumerTable title="KV reads" unit="" rows={report.kvReads} />
+          <ConsumerTable title="Workers AI neurons" unit="" rows={report.aiNeurons} />
+          <ConsumerTable title="R2 storage" unit=" GB" rows={report.r2Storage} />
         </div>
       )}
     </div>

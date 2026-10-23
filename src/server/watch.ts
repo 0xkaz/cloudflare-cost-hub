@@ -1,4 +1,5 @@
-// Account watch for the daily digest: Workers that keep failing, and the Workers / D1 databases that use the most
+// Account watch for the daily digest: Workers that keep failing, and the Workers / D1 databases / KV namespaces /
+// Workers AI models / R2 buckets that use the most
 // (with sudden jumps against their previous-week average). Yesterday (UTC) is compared with the 7 days before it.
 import type { CloudflareAccountInput } from './cloudflare-api';
 import { resolveInstanceNames } from './cloudflare-rest';
@@ -14,7 +15,10 @@ export const FAIL_MIN_CRON_RUNS = 3;
 export const FAIL_MIN_SHARE = 0.5;
 // A day is a jump when it is SPIKE_FACTOR x the previous-week daily average and above the metric's floor.
 export const SPIKE_FACTOR = 3;
-export const FLOORS = { cpuSeconds: 300, requests: 50_000, rowsWritten: 100_000, rowsRead: 50_000_000 } as const;
+export const FLOORS = {
+  cpuSeconds: 300, requests: 50_000, rowsWritten: 100_000, rowsRead: 50_000_000,
+  kvReads: 500_000, aiNeurons: 50_000, r2GB: 5,
+} as const;
 const TOP_N = 5;
 
 export interface WorkerDay { script: string; date: string; requests: number; errors: number; cpuUs: number; statuses: Record<string, number> }
@@ -30,10 +34,18 @@ export interface WatchReport {
   workersRequests: Consumer[];
   d1Written: Consumer[];
   d1Read: Consumer[];
+  kvReads: Consumer[];      // KV read operations per namespace
+  aiNeurons: Consumer[];    // Workers AI neurons per model
+  r2Storage: Consumer[];    // R2 stored GB per bucket (daily peak)
 }
 
 interface RawWorkerRow { sum: { requests?: number; errors?: number; cpuTimeUs?: number }; dimensions: { scriptName: string; date: string; status: string } }
 interface RawD1Row { sum: { rowsWritten?: number; rowsRead?: number }; dimensions: { databaseId: string; date: string } }
+interface RawExtra {
+  k: Array<{ sum: { requests?: number }; dimensions: { namespaceId: string; date: string } }>;
+  a: Array<{ sum: { totalNeurons?: number }; dimensions: { modelId: string; date: string } }>;
+  r: Array<{ max: { payloadSize?: number }; dimensions: { bucketName: string; date: string } }>;
+}
 
 function ymd(d: Date): string { return d.toISOString().slice(0, 10); }
 
@@ -127,6 +139,7 @@ export async function fetchWatchReport(account: CloudflareAccountInput, now = ne
     cpuUs: r.sum.cpuTimeUs ?? 0, statuses: { [r.dimensions.status]: r.sum.requests ?? 0 },
   }));
   const names = await resolveInstanceNames(account, 'database');
+  const extra = await fetchExtra(account, start, day).catch((err) => { console.error('Watch extra datasets failed:', err); return null; });
   const d1: D1Day[] = (acct.d ?? []).map((r) => ({
     id: names[r.dimensions.databaseId] ?? r.dimensions.databaseId, date: r.dimensions.date,
     rowsWritten: r.sum.rowsWritten ?? 0, rowsRead: r.sum.rowsRead ?? 0,
@@ -140,20 +153,50 @@ export async function fetchWatchReport(account: CloudflareAccountInput, now = ne
     workersRequests: topConsumers(workers.map((w) => ({ name: w.script, date: w.date, value: w.requests })), day, FLOORS.requests),
     d1Written: topConsumers(d1.map((x) => ({ name: x.id, date: x.date, value: x.rowsWritten })), day, FLOORS.rowsWritten),
     d1Read: topConsumers(d1.map((x) => ({ name: x.id, date: x.date, value: x.rowsRead })), day, FLOORS.rowsRead),
+    kvReads: extra ? topConsumers(extra.kv, day, FLOORS.kvReads) : [],
+    aiNeurons: extra ? topConsumers(extra.ai, day, FLOORS.aiNeurons) : [],
+    r2Storage: extra ? topConsumers(extra.r2, day, FLOORS.r2GB) : [],
+  };
+}
+
+// KV reads, Workers AI neurons and R2 storage, in a query of their own so a dataset the token cannot read never
+// drops the Workers / D1 part of the report.
+async function fetchExtra(account: CloudflareAccountInput, start: string, end: string) {
+  const data = await gql<{ viewer: { accounts: RawExtra[] } }>(account, `
+    query ($accountTag: String!, $start: Date!, $end: Date!) {
+      viewer { accounts(filter: { accountTag: $accountTag }) {
+        k: kvOperationsAdaptiveGroups(limit: 10000, filter: { date_geq: $start, date_leq: $end, actionType: "read" }) {
+          sum { requests } dimensions { namespaceId date }
+        }
+        a: aiInferenceAdaptiveGroups(limit: 10000, filter: { date_geq: $start, date_leq: $end }) {
+          sum { totalNeurons } dimensions { modelId date }
+        }
+        r: r2StorageAdaptiveGroups(limit: 10000, filter: { date_geq: $start, date_leq: $end }) {
+          max { payloadSize } dimensions { bucketName date }
+        }
+      } }
+    }`, { accountTag: account.accountId, start, end });
+  const acct = data.viewer.accounts[0] ?? { k: [], a: [], r: [] };
+  const ns = await resolveInstanceNames(account, 'namespace');
+  return {
+    kv: (acct.k ?? []).map((r) => ({ name: ns[r.dimensions.namespaceId] ?? r.dimensions.namespaceId, date: r.dimensions.date, value: r.sum.requests ?? 0 })),
+    ai: (acct.a ?? []).map((r) => ({ name: r.dimensions.modelId.replace(/^@cf\//, ''), date: r.dimensions.date, value: r.sum.totalNeurons ?? 0 })),
+    r2: (acct.r ?? []).map((r) => ({ name: r.dimensions.bucketName, date: r.dimensions.date, value: (r.max.payloadSize ?? 0) / 1e9 })),
   };
 }
 
 export function hasWatchFindings(r: WatchReport | null): boolean {
   if (!r) return false;
-  return r.failing.length > 0 || [r.workersCpu, r.workersRequests, r.d1Written, r.d1Read].some((l) => l.some((c) => c.spike));
+  return r.failing.length > 0 || [r.workersCpu, r.workersRequests, r.d1Written, r.d1Read, r.kvReads, r.aiNeurons, r.r2Storage]
+    .some((l) => (l ?? []).some((c) => c.spike));
 }
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
 const fmt = (n: number) => (n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : n.toFixed(n < 10 ? 1 : 0));
 const TD = 'padding:4px 8px;border-bottom:1px solid #1e293b;font-size:13px;';
 
-function consumerTable(title: string, unit: string, list: Consumer[]): string {
-  if (!list.length) return '';
+function consumerTable(title: string, unit: string, list: Consumer[] | undefined): string {
+  if (!list?.length) return '';
   const rows = list.map((c) => `<tr>
       <td style="${TD}">${c.spike ? '🔺 ' : ''}${esc(c.name)}</td>
       <td style="${TD}text-align:right;">${fmt(c.value)}${unit}</td>
@@ -178,5 +221,8 @@ export function watchSection(r: WatchReport | null): string {
     ${consumerTable('Workers by requests', '', r.workersRequests)}
     ${consumerTable('D1 rows written', '', r.d1Written)}
     ${consumerTable('D1 rows read', '', r.d1Read)}
+    ${consumerTable('KV reads', '', r.kvReads)}
+    ${consumerTable('Workers AI neurons', '', r.aiNeurons)}
+    ${consumerTable('R2 storage', ' GB', r.r2Storage)}
     <p style="margin:6px 0 0;font-size:12px;color:#64748b;">🔺 = ${SPIKE_FACTOR}x or more of the previous-week average.</p>`;
 }
