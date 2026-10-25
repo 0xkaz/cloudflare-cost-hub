@@ -6,7 +6,7 @@ import { Activity, AlertTriangle } from 'lucide-react';
 interface FailingWorker { script: string; cron?: string; requests: number; errors: number; share: number; statuses: Record<string, number> }
 interface Consumer { name: string; value: number; prevAvg: number; spike: boolean }
 interface WatchReport {
-  day: string; failing: FailingWorker[]; workersCpu: Consumer[]; workersRequests: Consumer[]; d1Written: Consumer[]; d1Read: Consumer[];
+  day: string; failing: FailingWorker[]; cronRuns?: number; workersCpu: Consumer[]; workersRequests: Consumer[]; d1Written: Consumer[]; d1Read: Consumer[];
   kvReads?: Consumer[]; aiNeurons?: Consumer[]; r2Storage?: Consumer[];
 }
 
@@ -79,7 +79,12 @@ export function AccountWatch() {
               ))}
             </div>
           ) : (
-            <div className="text-sm text-emerald-400">No failing Workers or cron schedules.</div>
+            <div className="text-sm text-emerald-400">No failing Workers{report.cronRuns === 0 ? '' : ' or cron schedules'}.</div>
+          )}
+          {report.cronRuns === 0 && (
+            <div className="text-xs text-amber-400">
+              Cloudflare reported no cron runs for this day, so failing cron schedules cannot be detected (Workers are still checked by their overall error rate).
+            </div>
           )}
           <ConsumerTable title="Workers by CPU" unit=" s" rows={report.workersCpu} />
           <ConsumerTable title="Workers by requests" unit="" rows={report.workersRequests} />

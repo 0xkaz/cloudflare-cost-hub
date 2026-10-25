@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { failingWorkers, failingCrons, mergeFailing, topConsumers, hasWatchFindings, watchSection, FLOORS, type WorkerDay, type WatchReport } from '../../src/server/watch';
+import { failingWorkers, failingCrons, mergeFailing, topConsumers, hasWatchFindings, watchSection, FLOORS, CRON_DATA_MISSING, type WorkerDay, type WatchReport } from '../../src/server/watch';
 import type { ServicesAnalysis } from '../../src/shared/types';
 import { buildEmail } from '../../src/server/alerts';
 
@@ -53,7 +53,7 @@ describe('topConsumers', () => {
 
 describe('watch section in the digest', () => {
   const report: WatchReport = {
-    day, failing: [{ script: 'gcc-prop', requests: 24, errors: 24, share: 1, statuses: { scriptThrewException: 24 } }],
+    day, failing: [{ script: 'gcc-prop', requests: 24, errors: 24, share: 1, statuses: { scriptThrewException: 24 } }], cronRuns: 120,
     workersCpu: [], workersRequests: [], d1Written: [{ name: 'uae-prop-db', value: 300_000, prevAvg: 50_000, spike: true }], d1Read: [],
     kvReads: [], aiNeurons: [], r2Storage: [],
   };
@@ -73,5 +73,11 @@ describe('watch section in the digest', () => {
     const { subject, html: mail } = buildEmail(analysis, null, 'https://x', report);
     expect(subject.startsWith('❌ 1 Worker failing · ')).toBe(true);
     expect(mail).toContain('Account watch (2026-10-19 UTC)');
+  });
+  it('says when Cloudflare reported no cron runs, without making it a finding', () => {
+    expect(watchSection(report)).not.toContain(CRON_DATA_MISSING);
+    const blind = { ...report, failing: [], d1Written: [], cronRuns: 0 };
+    expect(watchSection(blind)).toContain(CRON_DATA_MISSING);
+    expect(hasWatchFindings(blind)).toBe(false);
   });
 });

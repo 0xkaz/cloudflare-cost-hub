@@ -30,6 +30,7 @@ export interface Consumer { name: string; value: number; prevAvg: number; spike:
 export interface WatchReport {
   day: string;
   failing: FailingWorker[];
+  cronRuns: number;           // scheduled runs Cloudflare reported for the day (0: cron failures cannot be seen)
   workersCpu: Consumer[];     // CPU seconds
   workersRequests: Consumer[];
   d1Written: Consumer[];
@@ -149,6 +150,7 @@ export async function fetchWatchReport(account: CloudflareAccountInput, now = ne
     failing: mergeFailing(
       failingCrons((acct.s ?? []).map((r) => ({ script: r.scriptName, cron: r.cron, status: r.status }))),
       failingWorkers(workers, day)),
+    cronRuns: (acct.s ?? []).length,
     workersCpu: topConsumers(workers.map((w) => ({ name: w.script, date: w.date, value: w.cpuUs / 1e6 })), day, FLOORS.cpuSeconds),
     workersRequests: topConsumers(workers.map((w) => ({ name: w.script, date: w.date, value: w.requests })), day, FLOORS.requests),
     d1Written: topConsumers(d1.map((x) => ({ name: x.id, date: x.date, value: x.rowsWritten })), day, FLOORS.rowsWritten),
@@ -185,6 +187,11 @@ async function fetchExtra(account: CloudflareAccountInput, start: string, end: s
   };
 }
 
+// Cloudflare's workersInvocationsScheduled dataset has returned no rows for whole days (from 2026-10-20) while the
+// crons kept running; say so instead of reporting "no failing cron schedules".
+export const CRON_DATA_MISSING =
+  'Cloudflare reported no cron runs for this day, so failing cron schedules cannot be detected (Workers are still checked by their overall error rate).';
+
 export function hasWatchFindings(r: WatchReport | null): boolean {
   if (!r) return false;
   return r.failing.length > 0 || [r.workersCpu, r.workersRequests, r.d1Written, r.d1Read, r.kvReads, r.aiNeurons, r.r2Storage]
@@ -215,8 +222,11 @@ export function watchSection(r: WatchReport | null): string {
         ${r.failing.map((w) => `<div style="font-size:13px;color:#e2e8f0;">${esc(w.script)}${w.cron ? ` (cron ${esc(w.cron)})` : ''} — ${w.errors} / ${w.requests} ${w.cron ? 'runs' : 'invocations'} failed (${Math.round(w.share * 100)}%)${Object.keys(w.statuses).length ? ` · ${esc(Object.entries(w.statuses).map(([s, n]) => `${s} ${n}`).join(', '))}` : ''}</div>`).join('')}
       </div>`
     : '';
+  const noCron = r.cronRuns === 0
+    ? `<p style="margin:0 0 12px;font-size:12px;color:#fbbf24;">${CRON_DATA_MISSING}</p>`
+    : '';
   return `<h3 style="margin:24px 0 8px;font-size:15px;">Account watch (${r.day} UTC)</h3>
-    ${failing}
+    ${failing}${noCron}
     ${consumerTable('Workers by CPU', ' s', r.workersCpu)}
     ${consumerTable('Workers by requests', '', r.workersRequests)}
     ${consumerTable('D1 rows written', '', r.d1Written)}
