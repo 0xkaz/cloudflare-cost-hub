@@ -47,6 +47,9 @@ app.all('*', async (c) => {
       {
         ASSET_NAMESPACE: assetNamespace as Options['ASSET_NAMESPACE'],
         ASSET_MANIFEST: manifest,
+        // Vite's hashed bundles never change under the same name: let browsers keep them for a year.
+        cacheControl: (req: Request) =>
+          new URL(req.url).pathname.startsWith('/assets/') ? { browserTTL: 31536000 } : {},
       }
     );
   } catch {
