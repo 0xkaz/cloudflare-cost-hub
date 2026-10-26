@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { failingWorkers, failingCrons, mergeFailing, topConsumers, hasWatchFindings, watchSection, FLOORS, CRON_DATA_MISSING, type WorkerDay, type WatchReport } from '../../src/server/watch';
+import { failingWorkers, failingCrons, mergeFailing, topConsumers, hasWatchFindings, watchSection, stoppedDatabases, silentWorkers, FLOORS, CRON_DATA_MISSING, type WorkerDay, type D1Day, type WatchReport } from '../../src/server/watch';
 import type { ServicesAnalysis } from '../../src/shared/types';
 import { buildEmail } from '../../src/server/alerts';
 
@@ -51,9 +51,39 @@ describe('topConsumers', () => {
   });
 });
 
+describe('stops', () => {
+  const weekAgo = '2026-10-12';
+  it('flags a database written far less than on the same weekday last week', () => {
+    const rows: D1Day[] = [
+      { id: 'auction-db', date: weekAgo, rowsWritten: 40_000, rowsRead: 0 },
+      { id: 'auction-db', date: day, rowsWritten: 300, rowsRead: 0 },
+      { id: 'steady-db', date: weekAgo, rowsWritten: 40_000, rowsRead: 0 },
+      { id: 'steady-db', date: day, rowsWritten: 30_000, rowsRead: 0 },
+      { id: 'tiny-db', date: weekAgo, rowsWritten: 900, rowsRead: 0 },
+      { id: 'gone-db', date: weekAgo, rowsWritten: 8_000, rowsRead: 0 },
+      // the Sunday before is not the comparison day: a Sun-Thu market stays quiet
+      { id: 'ksa-db', date: '2026-10-18', rowsWritten: 50_000, rowsRead: 0 },
+      // already low the day before (vs 10-11): reported then, or the new normal after an intended cut
+      { id: 'cut-db', date: '2026-10-11', rowsWritten: 60_000, rowsRead: 0 },
+      { id: 'cut-db', date: '2026-10-18', rowsWritten: 2_000, rowsRead: 0 },
+      { id: 'cut-db', date: weekAgo, rowsWritten: 60_000, rowsRead: 0 },
+      { id: 'cut-db', date: day, rowsWritten: 2_000, rowsRead: 0 },
+    ];
+    expect(stoppedDatabases(rows, day)).toEqual([
+      { name: 'auction-db', kind: 'd1', value: 300, before: 40_000 },
+      { name: 'gone-db', kind: 'd1', value: 0, before: 8_000 },
+    ]);
+  });
+  it('flags a busy Worker that served nothing', () => {
+    const w = (script: string, date: string, requests: number): WorkerDay => ({ script, date, requests, errors: 0, cpuUs: 0, statuses: {} });
+    const rows = [w('site', '2026-10-17', 3000), w('site', '2026-10-18', 3000), w('quiet', '2026-10-18', 100), w('live', '2026-10-18', 5000), w('live', day, 10)];
+    expect(silentWorkers(rows, day)).toEqual([{ name: 'site', kind: 'worker', value: 0, before: 3000 }]);
+  });
+});
+
 describe('watch section in the digest', () => {
   const report: WatchReport = {
-    day, failing: [{ script: 'gcc-prop', requests: 24, errors: 24, share: 1, statuses: { scriptThrewException: 24 } }], cronRuns: 120,
+    day, failing: [{ script: 'gcc-prop', requests: 24, errors: 24, share: 1, statuses: { scriptThrewException: 24 } }], stopped: [], cronRuns: 120,
     workersCpu: [], workersRequests: [], d1Written: [{ name: 'uae-prop-db', value: 300_000, prevAvg: 50_000, spike: true }], d1Read: [],
     kvReads: [], aiNeurons: [], r2Storage: [],
   };
@@ -73,6 +103,13 @@ describe('watch section in the digest', () => {
     const { subject, html: mail } = buildEmail(analysis, null, 'https://x', report);
     expect(subject.startsWith('❌ 1 Worker failing · ')).toBe(true);
     expect(mail).toContain('Account watch (2026-10-19 UTC)');
+  });
+  it('lists stops, makes them a finding and names them in the subject', () => {
+    const stops = { ...report, failing: [], d1Written: [], stopped: [{ name: 'auction-db', kind: 'd1' as const, value: 300, before: 40_000 }] };
+    expect(hasWatchFindings(stops)).toBe(true);
+    expect(watchSection(stops)).toContain('auction-db — D1 rows written 300 (same weekday last week 40.0k)');
+    const analysis = { accountName: 'A', month: '2026-10', currentMonthCost: 0, forecastedCost: 0, services: [], topDrivers: [] } as unknown as ServicesAnalysis;
+    expect(buildEmail(analysis, null, 'https://x', stops).subject.startsWith('⏸ 1 stopped? · ')).toBe(true);
   });
   it('says when Cloudflare reported no cron runs, without making it a finding', () => {
     expect(watchSection(report)).not.toContain(CRON_DATA_MISSING);

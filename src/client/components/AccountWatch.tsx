@@ -4,9 +4,10 @@ import { Activity, AlertTriangle } from 'lucide-react';
 // Same report as the "Account watch" section of the daily digest (GET /api/dashboard/watch): Workers / cron
 // schedules failing yesterday (UTC) and the top Workers / D1 databases with jumps against the previous week.
 interface FailingWorker { script: string; cron?: string; requests: number; errors: number; share: number; statuses: Record<string, number> }
+interface Stopped { name: string; kind: 'd1' | 'worker'; value: number; before: number }
 interface Consumer { name: string; value: number; prevAvg: number; spike: boolean }
 interface WatchReport {
-  day: string; failing: FailingWorker[]; cronRuns?: number; workersCpu: Consumer[]; workersRequests: Consumer[]; d1Written: Consumer[]; d1Read: Consumer[];
+  day: string; failing: FailingWorker[]; stopped?: Stopped[]; cronRuns?: number; workersCpu: Consumer[]; workersRequests: Consumer[]; d1Written: Consumer[]; d1Read: Consumer[];
   kvReads?: Consumer[]; aiNeurons?: Consumer[]; r2Storage?: Consumer[];
 }
 
@@ -80,6 +81,20 @@ export function AccountWatch() {
             </div>
           ) : (
             <div className="text-sm text-emerald-400">No failing Workers{report.cronRuns === 0 ? '' : ' or cron schedules'}.</div>
+          )}
+          {report.stopped && report.stopped.length > 0 && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+              <div className="mb-1 text-sm font-semibold text-amber-300">
+                Stopped on {report.day}? (a job that stopped, or a market holiday)
+              </div>
+              {report.stopped.map((x) => (
+                <div key={`${x.kind}|${x.name}`} className="text-sm text-slate-200">
+                  {x.name} — {x.kind === 'd1'
+                    ? `D1 rows written ${fmt(x.value)} (same weekday last week ${fmt(x.before)})`
+                    : `no requests (previous 7-day avg ${fmt(x.before)} a day)`}
+                </div>
+              ))}
+            </div>
           )}
           {report.cronRuns === 0 && (
             <div className="text-xs text-amber-400">

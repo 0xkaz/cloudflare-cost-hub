@@ -20,16 +20,27 @@ export const FLOORS = {
   kvReads: 500_000, aiNeurons: 50_000, r2GB: 5,
 } as const;
 const TOP_N = 5;
+// A stop: a D1 database written less than STOP_SHARE of what it was written on the same weekday a week earlier (when
+// that was at least STOP_MIN_ROWS), or a Worker with no request at all after averaging STOP_MIN_REQUESTS a day. This
+// catches a cron that stopped, or that catches its own errors and does nothing, without the cron-run dataset.
+// Comparing with the same weekday keeps weekend and Sun-Thu calendars quiet. Only the first day is shown (a database
+// that already qualified the day before is a stop already reported, or a new normal after an intended cut); a
+// market holiday still shows once.
+export const STOP_SHARE = 0.2;
+export const STOP_MIN_ROWS = 5_000;
+export const STOP_MIN_REQUESTS = 200;
 
 export interface WorkerDay { script: string; date: string; requests: number; errors: number; cpuUs: number; statuses: Record<string, number> }
 export interface D1Day { id: string; date: string; rowsWritten: number; rowsRead: number }
 
 export interface CronRun { script: string; cron: string; status: string }
 export interface FailingWorker { script: string; cron?: string; requests: number; errors: number; share: number; statuses: Record<string, number> }
+export interface Stopped { name: string; kind: 'd1' | 'worker'; value: number; before: number }
 export interface Consumer { name: string; value: number; prevAvg: number; spike: boolean }
 export interface WatchReport {
   day: string;
   failing: FailingWorker[];
+  stopped: Stopped[];          // D1 databases that stopped being written, Workers that stopped being called
   cronRuns: number;           // scheduled runs Cloudflare reported for the day (0: cron failures cannot be seen)
   workersCpu: Consumer[];     // CPU seconds
   workersRequests: Consumer[];
@@ -87,16 +98,48 @@ export function mergeFailing(crons: FailingWorker[], workers: FailingWorker[]): 
   return [...crons, ...workers.filter((w) => !seen.has(w.script))];
 }
 
+function shiftDay(day: string, days: number): string { return ymd(new Date(Date.parse(`${day}T00:00:00Z`) + days * 86400_000)); }
+const inPrevWeek = (date: string, day: string) => date < day && date >= shiftDay(day, -7);
+
+// D1 databases written far less on `day` than on the same weekday a week before, and not already the day before.
+export function stoppedDatabases(rows: D1Day[], day: string): Stopped[] {
+  const written = new Map<string, number>();
+  for (const r of rows) written.set(`${r.id}\u0000${r.date}`, (written.get(`${r.id}\u0000${r.date}`) ?? 0) + r.rowsWritten);
+  const get = (id: string, d: string) => written.get(`${id}\u0000${d}`) ?? 0;
+  const stopsOn = (id: string, d: string) => {
+    const before = get(id, shiftDay(d, -7));
+    return before >= STOP_MIN_ROWS && get(id, d) < STOP_SHARE * before;
+  };
+  return [...new Set(rows.map((r) => r.id))]
+    .filter((id) => stopsOn(id, day) && !stopsOn(id, shiftDay(day, -1)))
+    .map((name) => ({ name, kind: 'd1' as const, value: get(name, day), before: get(name, shiftDay(day, -7)) }))
+    .sort((a, b) => b.before - a.before);
+}
+
+// Workers that served nothing on `day` after a busy previous week (`before` = its daily average).
+export function silentWorkers(rows: WorkerDay[], day: string): Stopped[] {
+  const cur = new Map<string, number>(), prev = new Map<string, number>();
+  for (const r of rows) {
+    const m = r.date === day ? cur : inPrevWeek(r.date, day) ? prev : null;
+    if (m) m.set(r.script, (m.get(r.script) ?? 0) + r.requests);
+  }
+  const prevDays = new Set(rows.filter((r) => inPrevWeek(r.date, day)).map((r) => r.date)).size || 1;
+  return [...prev.entries()]
+    .map(([name, n]) => ({ name, kind: 'worker' as const, value: cur.get(name) ?? 0, before: n / prevDays }))
+    .filter((x) => x.value === 0 && x.before >= STOP_MIN_REQUESTS && !x.name.startsWith('__'))
+    .sort((a, b) => b.before - a.before);
+}
+
 // Top consumers of one metric on `day`, each with its previous-7-day daily average and a jump flag.
 export function topConsumers(
   rows: Array<{ name: string; date: string; value: number }>, day: string, floor: number, n = TOP_N
 ): Consumer[] {
   const cur = new Map<string, number>(), prev = new Map<string, number>();
   for (const r of rows) {
-    const m = r.date === day ? cur : r.date < day ? prev : null;
+    const m = r.date === day ? cur : inPrevWeek(r.date, day) ? prev : null;
     if (m) m.set(r.name, (m.get(r.name) ?? 0) + r.value);
   }
-  const prevDays = new Set(rows.filter((r) => r.date < day).map((r) => r.date)).size || 1;
+  const prevDays = new Set(rows.filter((r) => inPrevWeek(r.date, day)).map((r) => r.date)).size || 1;
   return [...cur.entries()]
     .map(([name, value]) => {
       const prevAvg = (prev.get(name) ?? 0) / prevDays;
@@ -119,7 +162,7 @@ async function gql<T>(account: CloudflareAccountInput, query: string, variables:
 
 export async function fetchWatchReport(account: CloudflareAccountInput, now = new Date()): Promise<WatchReport> {
   const day = ymd(new Date(now.getTime() - 86400_000));
-  const start = ymd(new Date(now.getTime() - 8 * 86400_000));
+  const start = ymd(new Date(now.getTime() - 9 * 86400_000)); // day - 8: the stop check compares day - 1 with day - 8
   const data = await gql<{ viewer: { accounts: Array<{ w: RawWorkerRow[]; d: RawD1Row[]; s: Array<{ scriptName: string; cron: string; status: string }> }> } }>(account, `
     query ($accountTag: String!, $start: Date!, $end: Date!, $dayStart: Time!, $dayEnd: Time!) {
       viewer { accounts(filter: { accountTag: $accountTag }) {
@@ -150,6 +193,7 @@ export async function fetchWatchReport(account: CloudflareAccountInput, now = ne
     failing: mergeFailing(
       failingCrons((acct.s ?? []).map((r) => ({ script: r.scriptName, cron: r.cron, status: r.status }))),
       failingWorkers(workers, day)),
+    stopped: [...stoppedDatabases(d1, day), ...silentWorkers(workers, day)],
     cronRuns: (acct.s ?? []).length,
     workersCpu: topConsumers(workers.map((w) => ({ name: w.script, date: w.date, value: w.cpuUs / 1e6 })), day, FLOORS.cpuSeconds),
     workersRequests: topConsumers(workers.map((w) => ({ name: w.script, date: w.date, value: w.requests })), day, FLOORS.requests),
@@ -194,7 +238,7 @@ export const CRON_DATA_MISSING =
 
 export function hasWatchFindings(r: WatchReport | null): boolean {
   if (!r) return false;
-  return r.failing.length > 0 || [r.workersCpu, r.workersRequests, r.d1Written, r.d1Read, r.kvReads, r.aiNeurons, r.r2Storage]
+  return r.failing.length > 0 || (r.stopped ?? []).length > 0 || [r.workersCpu, r.workersRequests, r.d1Written, r.d1Read, r.kvReads, r.aiNeurons, r.r2Storage]
     .some((l) => (l ?? []).some((c) => c.spike));
 }
 
@@ -222,11 +266,19 @@ export function watchSection(r: WatchReport | null): string {
         ${r.failing.map((w) => `<div style="font-size:13px;color:#e2e8f0;">${esc(w.script)}${w.cron ? ` (cron ${esc(w.cron)})` : ''} — ${w.errors} / ${w.requests} ${w.cron ? 'runs' : 'invocations'} failed (${Math.round(w.share * 100)}%)${Object.keys(w.statuses).length ? ` · ${esc(Object.entries(w.statuses).map(([s, n]) => `${s} ${n}`).join(', '))}` : ''}</div>`).join('')}
       </div>`
     : '';
+  const stopped = r.stopped?.length
+    ? `<div style="margin:0 0 12px;padding:10px 14px;border-radius:8px;background:#f59e0b1a;border:1px solid #f59e0b40;">
+        <div style="color:#fbbf24;font-weight:600;margin-bottom:4px;">Stopped on ${r.day}? (a job that stopped, or a market holiday)</div>
+        ${r.stopped.map((x) => `<div style="font-size:13px;color:#e2e8f0;">${esc(x.name)} — ${x.kind === 'd1'
+          ? `D1 rows written ${fmt(x.value)} (same weekday last week ${fmt(x.before)})`
+          : `no requests (previous 7-day avg ${fmt(x.before)} a day)`}</div>`).join('')}
+      </div>`
+    : '';
   const noCron = r.cronRuns === 0
     ? `<p style="margin:0 0 12px;font-size:12px;color:#fbbf24;">${CRON_DATA_MISSING}</p>`
     : '';
   return `<h3 style="margin:24px 0 8px;font-size:15px;">Account watch (${r.day} UTC)</h3>
-    ${failing}${noCron}
+    ${failing}${stopped}${noCron}
     ${consumerTable('Workers by CPU', ' s', r.workersCpu)}
     ${consumerTable('Workers by requests', '', r.workersRequests)}
     ${consumerTable('D1 rows written', '', r.d1Written)}

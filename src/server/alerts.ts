@@ -145,7 +145,10 @@ export function buildEmail(
     : billableCount
       ? `⚠️ Cloudflare cost alert: $${analysis.currentMonthCost.toFixed(2)} this month`
       : `Cloudflare usage report — ${flagged.length} metric${flagged.length === 1 ? '' : 's'} to watch`;
-  const subject = failing ? `❌ ${failing} Worker${failing === 1 ? '' : 's'} failing · ${base}` : base;
+  const stopped = watch?.stopped?.length ?? 0;
+  const subject = failing
+    ? `❌ ${failing} Worker${failing === 1 ? '' : 's'} failing · ${base}`
+    : stopped ? `⏸ ${stopped} stopped? · ${base}` : base;
 
   const html = `<div style="font-family:ui-sans-serif,system-ui,sans-serif;background:#0f172a;color:#e2e8f0;padding:24px;border-radius:12px;max-width:680px;">
     <h2 style="margin:0 0 4px;">Cloudflare Cost Hub</h2>
