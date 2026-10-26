@@ -160,6 +160,20 @@ async function gql<T>(account: CloudflareAccountInput, query: string, variables:
   return json.data as T;
 }
 
+// Past days on the Alerts page: Cloudflare keeps KV / Workers AI / R2 analytics for about 32 days and the report reads
+// the 8 days before the day, so 21 days back keeps every section.
+export const WATCH_MAX_DAYS_BACK = 21;
+
+// The `now` that makes fetchWatchReport report `day` (YYYY-MM-DD), or null when `day` is not one of the last
+// WATCH_MAX_DAYS_BACK + 1 complete UTC days. No `day`: the latest complete day.
+export function watchNowFor(day: string | undefined, now = new Date()): Date | null {
+  if (!day) return now;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || Number.isNaN(Date.parse(`${day}T00:00:00Z`))) return null;
+  const latest = ymd(new Date(now.getTime() - 86400_000));
+  if (day > latest || day < shiftDay(latest, -WATCH_MAX_DAYS_BACK)) return null;
+  return new Date(`${shiftDay(day, 1)}T12:00:00Z`);
+}
+
 export async function fetchWatchReport(account: CloudflareAccountInput, now = new Date()): Promise<WatchReport> {
   const day = ymd(new Date(now.getTime() - 86400_000));
   const start = ymd(new Date(now.getTime() - 9 * 86400_000)); // day - 8: the stop check compares day - 1 with day - 8

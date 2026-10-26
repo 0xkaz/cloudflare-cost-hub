@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { failingWorkers, failingCrons, mergeFailing, topConsumers, hasWatchFindings, watchSection, stoppedDatabases, silentWorkers, FLOORS, CRON_DATA_MISSING, type WorkerDay, type D1Day, type WatchReport } from '../../src/server/watch';
+import { failingWorkers, failingCrons, mergeFailing, topConsumers, hasWatchFindings, watchSection, stoppedDatabases, silentWorkers, watchNowFor, FLOORS, CRON_DATA_MISSING, type WorkerDay, type D1Day, type WatchReport } from '../../src/server/watch';
 import type { ServicesAnalysis } from '../../src/shared/types';
 import { buildEmail } from '../../src/server/alerts';
 
@@ -116,5 +116,18 @@ describe('watch section in the digest', () => {
     const blind = { ...report, failing: [], d1Written: [], cronRuns: 0 };
     expect(watchSection(blind)).toContain(CRON_DATA_MISSING);
     expect(hasWatchFindings(blind)).toBe(false);
+  });
+});
+
+describe('watchNowFor', () => {
+  const now = new Date('2026-10-26T06:00:00Z'); // latest complete day: 2026-10-25
+  it('maps a past day to a time on the next day, within the last 22 days', () => {
+    expect(watchNowFor(undefined, now)).toBe(now);
+    expect(watchNowFor('2026-10-25', now)?.toISOString()).toBe('2026-10-26T12:00:00.000Z');
+    expect(watchNowFor('2026-10-04', now)?.toISOString()).toBe('2026-10-05T12:00:00.000Z');
+    expect(watchNowFor('2026-10-03', now)).toBeNull();
+    expect(watchNowFor('2026-10-26', now)).toBeNull();
+    expect(watchNowFor('2026-13-01', now)).toBeNull();
+    expect(watchNowFor('yesterday', now)).toBeNull();
   });
 });

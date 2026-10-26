@@ -12,7 +12,7 @@ import { isRateLimit } from '../http';
 import { getUserAlertSetting } from '../db/user-alert-settings';
 import { resolveCloudflareAccount } from '../cf-oauth';
 import { bustAccountCache, cacheKey, cachedJson } from '../cache';
-import { fetchWatchReport } from '../watch';
+import { fetchWatchReport, watchNowFor, WATCH_MAX_DAYS_BACK } from '../watch';
 import type { DashboardData } from '../../shared/types';
 
 // Cloudflare usage data has daily granularity, so a few minutes of caching is
@@ -218,13 +218,19 @@ dashboard.get('/threshold-preview', async (c) => {
 });
 
 // Account watch shown in the daily digest: Workers failing yesterday (UTC) and the top Workers / D1 databases
-// with jumps against their previous-week average.
+// with jumps against their previous-week average. ?day=YYYY-MM-DD shows one of the previous days.
 dashboard.get('/watch', async (c) => {
   const session = c.get('session' as never) as { userId: string };
+  const dayParam = c.req.query('day');
+  const now = watchNowFor(dayParam);
+  if (!now) return c.json({ error: `day must be one of the last ${WATCH_MAX_DAYS_BACK + 1} complete UTC days` }, 400);
   try {
     const account = await resolveCloudflareAccount(c.env, session.userId);
     if (!account) return c.json({ error: 'Cloudflare account not configured' }, 400);
-    return c.json(await fetchWatchReport(account));
+    // Yesterday's analytics can still settle; older days do not change.
+    const settled = !!dayParam && Date.parse(`${dayParam}T00:00:00Z`) < Date.now() - 2 * 86400_000;
+    return await cachedJson(c, cacheKey('watch', account.accountId, dayParam ?? 'latest'), settled ? 3600 : 300,
+      () => fetchWatchReport(account, now));
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     console.error('Watch report failed:', detail);

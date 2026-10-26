@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity, AlertTriangle } from 'lucide-react';
+import { Activity, AlertTriangle, ChevronLeft, ChevronRight } from 'lucide-react';
 
 // Same report as the "Account watch" section of the daily digest (GET /api/dashboard/watch): Workers / cron
 // schedules failing yesterday (UTC) and the top Workers / D1 databases with jumps against the previous week.
@@ -11,10 +11,14 @@ interface WatchReport {
   kvReads?: Consumer[]; aiNeurons?: Consumer[]; r2Storage?: Consumer[];
 }
 
+// Must match WATCH_MAX_DAYS_BACK in src/server/watch.ts.
+const MAX_DAYS_BACK = 21;
+const shiftDay = (day: string, days: number) => new Date(Date.parse(`${day}T00:00:00Z`) + days * 86400_000).toISOString().slice(0, 10);
+
 const fmt = (n: number) =>
   n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : n.toFixed(n < 10 ? 1 : 0);
 
-function ConsumerTable({ title, unit, rows }: { title: string; unit: string; rows?: Consumer[] }) {
+function ConsumerTable({ title, unit, rows, past }: { title: string; unit: string; rows?: Consumer[]; past?: boolean }) {
   if (!rows?.length) return null;
   return (
     <div>
@@ -23,7 +27,7 @@ function ConsumerTable({ title, unit, rows }: { title: string; unit: string; row
         <thead>
           <tr className="text-xs text-slate-500">
             <th className="py-1 text-left font-normal">name</th>
-            <th className="py-1 text-right font-normal">yesterday</th>
+            <th className="py-1 text-right font-normal">{past ? 'that day' : 'yesterday'}</th>
             <th className="py-1 text-right font-normal">prev. 7-day avg</th>
           </tr>
         </thead>
@@ -44,25 +48,52 @@ function ConsumerTable({ title, unit, rows }: { title: string; unit: string; row
 export function AccountWatch() {
   const [report, setReport] = useState<WatchReport | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [day, setDay] = useState<string | null>(null); // null: the latest complete day
+  const [latest, setLatest] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch('/api/dashboard/watch', { credentials: 'same-origin' })
+    let cancelled = false;
+    setReport(null);
+    setError(null);
+    fetch(`/api/dashboard/watch${day ? `?day=${day}` : ''}`, { credentials: 'same-origin' })
       .then(async (res) => {
         const body = (await res.json()) as WatchReport & { error?: string; detail?: string };
         if (!res.ok) throw new Error(body?.detail || body?.error || `HTTP ${res.status}`);
+        if (cancelled) return;
         setReport(body);
+        if (!day) setLatest(body.day);
       })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
-  }, []);
+      .catch((e: unknown) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); });
+    return () => { cancelled = true; };
+  }, [day]);
+
+  const shown = day ?? latest;
+  const go = (delta: number) => {
+    if (!shown || !latest) return;
+    const next = shiftDay(shown, delta);
+    setDay(next >= latest ? null : next);
+  };
+  const canBack = !!shown && !!latest && shown > shiftDay(latest, -MAX_DAYS_BACK);
+  const canForward = !!shown && !!latest && shown < latest;
 
   return (
     <div className="card">
       <div className="mb-1 flex items-center gap-2 text-lg font-semibold">
         <Activity className="h-5 w-5 text-indigo-400" />
-        Account watch{report ? ` (${report.day} UTC)` : ''}
+        Account watch{shown ? ` (${shown} UTC)` : ''}
+        <div className="ml-auto flex items-center gap-1">
+          <button type="button" className="rounded p-1 text-slate-400 hover:bg-slate-800 disabled:opacity-30"
+            onClick={() => go(-1)} disabled={!canBack} aria-label="Previous day" title="Previous day">
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <button type="button" className="rounded p-1 text-slate-400 hover:bg-slate-800 disabled:opacity-30"
+            onClick={() => go(1)} disabled={!canForward} aria-label="Next day" title="Next day">
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
       </div>
       <p className="mb-3 text-xs text-slate-400">
-        Also in the daily digest. 🔺 = 3x or more of the previous-week average.
+        Also in the daily digest. 🔺 = 3x or more of the previous-week average. ◀ ▶ step through the last {MAX_DAYS_BACK + 1} days.
       </p>
       {error && <div className="text-sm text-red-400">Could not load: {error}</div>}
       {!report && !error && <div className="text-sm text-slate-500">Loading…</div>}
@@ -101,13 +132,13 @@ export function AccountWatch() {
               Cloudflare reported no cron runs for this day, so failing cron schedules cannot be detected (Workers are still checked by their overall error rate).
             </div>
           )}
-          <ConsumerTable title="Workers by CPU" unit=" s" rows={report.workersCpu} />
-          <ConsumerTable title="Workers by requests" unit="" rows={report.workersRequests} />
-          <ConsumerTable title="D1 rows written" unit="" rows={report.d1Written} />
-          <ConsumerTable title="D1 rows read" unit="" rows={report.d1Read} />
-          <ConsumerTable title="KV reads" unit="" rows={report.kvReads} />
-          <ConsumerTable title="Workers AI neurons" unit="" rows={report.aiNeurons} />
-          <ConsumerTable title="R2 storage" unit=" GB" rows={report.r2Storage} />
+          <ConsumerTable title="Workers by CPU" unit=" s" rows={report.workersCpu} past={!!day} />
+          <ConsumerTable title="Workers by requests" unit="" rows={report.workersRequests} past={!!day} />
+          <ConsumerTable title="D1 rows written" unit="" rows={report.d1Written} past={!!day} />
+          <ConsumerTable title="D1 rows read" unit="" rows={report.d1Read} past={!!day} />
+          <ConsumerTable title="KV reads" unit="" rows={report.kvReads} past={!!day} />
+          <ConsumerTable title="Workers AI neurons" unit="" rows={report.aiNeurons} past={!!day} />
+          <ConsumerTable title="R2 storage" unit=" GB" rows={report.r2Storage} past={!!day} />
         </div>
       )}
     </div>
