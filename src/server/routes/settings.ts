@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
-import { z } from 'zod';
+import * as z from 'zod';
 import type { Env } from '../types';
 import { getSession } from '../auth';
 import { getAccountPlan } from '../cloudflare-rest';

@@ -19,15 +19,15 @@
   },
   "dependencies": {
     "@cloudflare/kv-asset-handler": "^0.3.2",
-    "@hono/zod-validator": "^0.2.2",
+    "@hono/zod-validator": "^0.9.1",
     "hono": "^4.4.8",
     "jose": "^5.4.1",
     "lucide-react": "^0.396.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^6.23.1",
+    "react-router-dom": "^7.18.4",
     "recharts": "^2.12.7",
-    "zod": "^3.23.8"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261026.1",
