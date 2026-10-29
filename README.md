@@ -68,7 +68,7 @@ Browser ──HTTPS──▶  Cloudflare Worker (Hono)
                      ├─ /api/settings/*    account/plan, per-user alert settings
                      ├─ /api/budgets       monthly budget (get/set/clear) + forecast status
                      ├─ /api/reports/*     CSV exports (cost history, usage)
-                     └─ *                  serves the React SPA (Workers Sites)
+                     └─ *                  serves the React SPA (Workers Static Assets)
 
 Worker ──▶ Cloudflare GraphQL Analytics   (per-product usage)
 Worker ──▶ Cloudflare REST API            (account list, plan, id→name resolution)

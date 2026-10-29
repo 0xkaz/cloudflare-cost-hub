@@ -1,5 +1,4 @@
 import { Hono } from 'hono';
-import { getAssetFromKV, type Options } from '@cloudflare/kv-asset-handler';
 import type { ExecutionContext, ScheduledController } from '@cloudflare/workers-types';
 import type { Env } from './types';
 import auth from './routes/auth';
@@ -15,7 +14,6 @@ import { runDailyAlerts, runThresholdAlerts } from './alerts';
 
 // The daily cron (snapshots + digest); any other cron only runs the hourly threshold check.
 const DAILY_CRON = '0 1 * * *';
-import manifestJSON from '__STATIC_CONTENT_MANIFEST';
 
 export { AlertDurableObject };
 
@@ -30,40 +28,9 @@ app.route('/api/reports', reportsRoute);
 
 app.get('/health', (c) => c.json({ ok: true, version: '0.1.0' }));
 
-// Serve React SPA for non-API routes
-app.all('*', async (c) => {
-  const manifest = JSON.parse(manifestJSON) as Options['ASSET_MANIFEST'];
-  const assetNamespace = c.env.__STATIC_CONTENT;
-  if (!assetNamespace) {
-    return c.text('Static content not configured', 500);
-  }
-
-  try {
-    return await getAssetFromKV(
-      {
-        request: c.req.raw,
-        waitUntil: (promise: Promise<unknown>) => c.executionCtx.waitUntil(promise),
-      } as never,
-      {
-        ASSET_NAMESPACE: assetNamespace as Options['ASSET_NAMESPACE'],
-        ASSET_MANIFEST: manifest,
-        // Vite's hashed bundles never change under the same name: let browsers keep them for a year.
-        cacheControl: (req: Request) =>
-          new URL(req.url).pathname.startsWith('/assets/') ? { browserTTL: 31536000 } : {},
-      }
-    );
-  } catch {
-    // SPA fallback for client-side routes (e.g. /settings, /services): serve
-    // index.html. Its KV key is content-hashed, so resolve it via the manifest.
-    const manifestMap = JSON.parse(manifestJSON) as Record<string, string>;
-    const indexKey = manifestMap['index.html'] || 'index.html';
-    const index = await assetNamespace.get(indexKey, { type: 'text' });
-    if (index) {
-      return c.newResponse(index, 200, { 'Content-Type': 'text/html; charset=utf-8' });
-    }
-    return c.text('Not Found', 404);
-  }
-});
+// The React SPA is served by Workers Static Assets ([assets] in wrangler.toml): only /api/* and /health reach the
+// Worker, every other path is a file of dist/client or, for client-side routes, its index.html.
+app.notFound((c) => c.json({ error: 'Not found' }, 404));
 
 // Capture a daily snapshot for every distinct connected Cloudflare account,
 // plus the env-configured account as a fallback. Accounts are deduplicated so an

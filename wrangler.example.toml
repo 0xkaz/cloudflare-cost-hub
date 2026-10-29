@@ -45,9 +45,12 @@ bucket_name = "cloudflare-cost-hub-data"
 binding = "CACHE"
 id = "your-kv-namespace-id"
 
-# Workers Sites static assets.
-[site]
-bucket = "./dist/client"
+# The React SPA (Workers Static Assets): files of dist/client, index.html for client-side routes. Only the API
+# runs the Worker first, so the OAuth callback (a browser navigation) is not answered with index.html.
+[assets]
+directory = "./dist/client"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*", "/health"]
 
 # Durable Objects for alert deduplication.
 [[durable_objects.bindings]]

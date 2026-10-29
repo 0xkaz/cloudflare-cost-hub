@@ -34,7 +34,6 @@ export interface Env {
   // Optional KV cache for computed dashboard/usage responses. When unbound, the
   // app recomputes on every request (see server/cache.ts).
   CACHE?: KVNamespace;
-  __STATIC_CONTENT: KVNamespace;
 }
 
 export interface Session {

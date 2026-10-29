@@ -64,7 +64,7 @@ Cloudflare の利用状況とコストを「見える化」するダッシュボ
                      ├─ /api/settings/*    アカウント/プラン・ユーザー別アラート設定
                      ├─ /api/budgets       月額予算(取得/設定/削除) + 予測ステータス
                      ├─ /api/reports/*     CSV エクスポート（コスト履歴・使用状況）
-                     └─ *                  React SPA を配信 (Workers Sites)
+                     └─ *                  React SPA を配信 (Workers Static Assets)
 
 Worker ──▶ Cloudflare GraphQL Analytics   (製品別の使用量)
 Worker ──▶ Cloudflare REST API            (アカウント一覧・プラン・ID→名前解決)
