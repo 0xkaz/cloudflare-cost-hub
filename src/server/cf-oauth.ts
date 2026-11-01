@@ -239,7 +239,7 @@ export async function getAuthorizedAccounts(
 ): Promise<{ accounts: AccountOption[]; activeId: string | null }> {
   const row = await getCfToken(env.DB, userId);
   if (!row) return { accounts: [], activeId: null };
-  let accounts: AccountOption[] = [];
+  let accounts: AccountOption[];
   try {
     accounts = row.accounts ? (JSON.parse(row.accounts) as AccountOption[]) : [];
   } catch {
@@ -342,7 +342,7 @@ export async function listConnectedAccounts(env: Env): Promise<ConnectedAccount[
   const rows = await listAllCfTokens(env.DB);
   const byAccount = new Map<string, ConnectedAccount>();
   for (const row of rows) {
-    let accounts: Array<{ id: string; name: string }> = [];
+    let accounts: Array<{ id: string; name: string }>;
     try {
       accounts = row.accounts ? (JSON.parse(row.accounts) as Array<{ id: string; name: string }>) : [];
     } catch {

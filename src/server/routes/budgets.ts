@@ -28,7 +28,7 @@ budgets.get('/', async (c) => {
   const budget = await getBudget(c.env.DB, session.userId, account.accountId);
 
   // Reuse a cached month forecast so this page is cheap to load.
-  let forecast = 0;
+  let forecast: number;
   try {
     const usage = await cachedCompute(
       c.env,

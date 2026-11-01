@@ -93,7 +93,7 @@ export async function getServiceTrends(
   const byProduct = new Map<string, Map<string, number>>();
   for (const row of results || []) {
     const month = String(row.month);
-    let metrics: SnapshotMetric[] = [];
+    let metrics: SnapshotMetric[];
     try {
       metrics = JSON.parse(String(row.payload || '[]')) as SnapshotMetric[];
     } catch {
