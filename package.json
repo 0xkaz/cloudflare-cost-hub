@@ -15,7 +15,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "deploy": "npm run build && wrangler deploy",
-    "db:migrate": "wrangler d1 migrations apply cloudflare-cost-hub-db"
+    "db:migrate": "wrangler d1 migrations apply cloudflare-cost-hub-db",
+    "watch:report": "tsx scripts/watch-report.ts"
   },
   "dependencies": {
     "@cloudflare/kv-asset-handler": "^0.3.2",
@@ -45,6 +46,7 @@
     "globals": "^16.5.0",
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.4",
+    "tsx": "^4.23.15",
     "typescript": "^5.5.2",
     "typescript-eslint": "^8.72.1",
     "vite": "^7.3.7",

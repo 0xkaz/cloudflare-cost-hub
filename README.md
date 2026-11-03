@@ -176,6 +176,7 @@ A daily cron (`0 1 * * *`) captures a cost snapshot and sends the alert digest.
 | `make build`   | Build frontend and Worker              |
 | `npm run deploy` | Build and deploy the Worker          |
 | `npm run db:migrate` | Apply D1 migrations              |
+| `npm run watch:report -- [--day YYYY-MM-DD]` | Print the account watch (failing / stopped Workers, top usage and jumps) as JSON; needs `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` |
 
 ## Project Structure
 
