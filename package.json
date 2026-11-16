@@ -21,7 +21,7 @@
   "dependencies": {
     "@cloudflare/kv-asset-handler": "^0.3.2",
     "@hono/zod-validator": "^0.9.1",
-    "hono": "^4.4.8",
+    "hono": "^4.13.18",
     "jose": "^5.4.1",
     "lucide-react": "^0.396.0",
     "react": "^18.3.1",
